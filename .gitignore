@@ -15,3 +15,7 @@ pages/
 chunks/
 logs/
 artifacts/
+debug/
+dist/
+build/
+*.egg-info/
