@@ -1,0 +1,8 @@
+[
+  {"input": "1.6 g/kg protein", "output": "\"g\" OR \"kg\" OR \"protein\""},
+  {"input": "5×5 squat", "output": "\"5x5\" OR \"squat\""},
+  {"input": "RPE 8 / RPE8", "output": "\"rpe8\""},
+  {"input": "שריר וכוח", "output": "\"שריר\" OR \"וכוח\""},
+  {"input": "---", "output": null},
+  {"input": "body path title source book page squat depth hip drive knee ankle barbell strength extra", "output": "\"squat\" OR \"depth\" OR \"hip\" OR \"drive\" OR \"knee\" OR \"ankle\" OR \"barbell\" OR \"strength\""}
+]

@@ -1,0 +1,15 @@
+{
+  "status": "authorized",
+  "license_type": "private-rag-permission",
+  "rights_holder": "Name or organization",
+  "scope": "Private local corpus and private hosted retrieval",
+  "evidence_reference": "Contract, receipt, email, or policy reference",
+  "notes": "Optional notes and restrictions",
+  "bibliography": {
+    "title": "Canonical display title",
+    "authors": ["Author One", "Author Two"],
+    "edition": "3rd",
+    "publication_year": 2024,
+    "language": "en"
+  }
+}

@@ -1,0 +1,490 @@
+The watcher—not Codex or Claude itself—monitors inbox/. This is more reliable because it continues running when the agents are closed. Both agents receive repository instructions for invoking and checking it.
+Install
+Open PowerShell:
+winget install -e --id Python.Python.3.12
+Restart PowerShell, then:
+Set-Location D:\rag
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+
+
+Add your private Gemini key locally:
+notepad .env
+Change:
+GEMINI_API_KEY=
+to:
+GEMINI_API_KEY=your-key-here
+Do not paste the key into Codex, Claude, source files, or Git.
+Test it
+Place a short PDF in:
+D:\rag\inbox
+Wait eight seconds, then run:
+.\scripts\run_once.ps1
+
+Check status and logs:
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . status
+Get-Content .\logs\ingest.log -Tail 50
+Enable automatic processing
+
+After the manual test works:
+powershell -ExecutionPolicy Bypass -File .\scripts\install_watcher_task.ps1
+This creates and starts the Windows Task Scheduler job RagPdfIngestWatcher.
+Verify it:
+Get-ScheduledTask -TaskName RagPdfIngestWatcher
+From then on, adding a PDF to D:\rag\inbox automatically processes it.
+
+
+when Installation complete of .\scripts\setup_windows.ps1:
+1. Open D:\rag\.env and paste your GEMINI_API_KEY.
+2. Run: .\scripts\run_once.ps1
+3. After the test succeeds, run: .\scripts\install_watcher_task.ps1
+
+
+
+Generated files
+For every book:
+raw/<book-id>/
+  page-0001.txt
+  page-0001.blocks.json
+  book.txt
+
+md/<book-id>/
+  page-0001.md
+  book.md
+
+metadata/<book-id>/
+  page-0001.json
+  pages.jsonl
+  manifest.json
+
+pages/<book-id>/
+  page-0001.png
+Every Markdown page contains YAML metadata such as:
+---
+source_file: "Biomechanics.pdf"
+pdf_page_number: 142
+citation: "Biomechanics.pdf, PDF p. 142"
+parser_model: "gemini-3.6-flash"
+---
+
+
+Successful PDFs move to processed/. Failed PDFs move to failed/. Interrupted jobs resume from their completed pages.
+Important implementation details
+The pipeline sends Gemini:
+A 240-DPI rendered page image.
+Native PyMuPDF text when available.
+Your improved transcription prompt.
+Therefore:
+Digital PDFs retain exact spelling, numbers and Hebrew from the text layer.
+Gemini reconstructs headings, columns, tables, figures and reading order visually.
+Image-only books work without native text.
+Native text blocks, fonts and bounding boxes remain available in JSON.
+Gemini retries temporary errors automatically.
+Page images remain available for verifying health-related claims.
+The prompt is available at [page_to_markdown.txt](D:\\rag\\prompts\\page_to_markdown.txt). Full installation and troubleshooting instructions are in [README.md](D:\\rag\\README.md). Codex and Claude instructions are in [AGENTS.md](D:\\rag\\AGENTS.md) and [CLAUDE.md](D:\\rag\\CLAUDE.md).
+Is this better than the alternatives?
+For your visually complex biomechanics, exercise, anatomy and nutrition books:
+Likely better than MarkItDown and text-only PyMuPDF for scans, columns and diagrams.
+Likely better than Docling for detailed visual descriptions and complex pages.
+Potentially better than Marker/Nemotron Parse, but this depends on tables, OCR language and page design.
+Not demonstrably better than LlamaParse Agentic/costeffecive. LlamaParse currently leads ParseBench, while Gemini 3.6 Flash High has not been benchmarked there.
+Your pipeline’s main advantage is control and auditability: exact native text, visual Markdown, original page images, bounding boxes and citations are all retained. Google documents Gemini 3.6 Flash as supporting image/PDF input, structured output, high thinking and multimodal/spatial reasoning: Gemini 3.6 Flash, PDF understanding.
+I validated the Python syntax, three unit tests, and all five PowerShell scripts. A live Gemini call remains to be tested after you install Python 3.12 and add your API key.
+
+
+
+
+--------------------
+
+
+Yes—those improvements were worth making. The pipeline is now safe enough for a small real-world trial.
+Key fixes:
+Rejects every Gemini finish reason except STOP; truncated output is never recorded as successful.
+Raises output allowance to 65,536 tokens.
+Permanent page failures create an Obsidian warning page and make the book partial; processing continues.
+Retries only transient failures such as 429, timeouts, and 5xx responses.
+Failed pages are excluded from retrieval chunks and retried during explicit re-ingestion.
+Recovers stale locks using the recorded PID without deleting another live process’s lock.
+Local .env now overrides stale shell variables.
+doctor performs actual directory write tests.
+Optional -AtStartup scheduled task runs as SYSTEM, including before login.
+Page images are written atomically.
+Obsidian YAML, tags, callouts, wikilinks, page block IDs, and book status were added.
+Heading-aware retrieval chunks use approximately 750 tokens with 120 overlap.
+Every page transition inside a chunk includes [p. N].
+Failed-page gaps cannot be represented misleadingly as continuous ranges.
+Oversized Markdown tables remain intact rather than being corrupted to satisfy the chunk limit.
+Open D:\rag as the Obsidian vault root so links between chunks/ and md/ resolve.
+One important correction from the pasted File Search example: the current Gemini API uses File Search stores—not vectorStores—and the Vercel AI SDK uses google.tools.fileSearch(...), not providerOptions.google.fileSearchStore. See the Gemini File Search documentation and Vercel Google provider documentation.
+
+Validation completed:
+8 Python tests passed.
+All 5 PowerShell scripts parsed successfully.
+UTF-8/Hebrew text scan passed.
+Live Gemini ingestion has not been run yet because Python 3.12 and project dependencies still need installation.
+
+Start here:
+Set-Location D:\rag
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+.\scripts\run_once.ps1
+Use a 2–5-page test PDF first. Full operating instructions are in [README.md](D:\\rag\\README.md). The main changes are in [pipeline.py](D:\\rag\\src\\rag_pdf_ingest\\pipeline.py), [gemini_client.py](D:\\rag\\src\\rag_pdf_ingest\\gemini_client.py), and [chunking.py](D:\\rag\\src\\rag_pdf_ingest\\chunking.py).
+I have not enabled automatic remote File Search uploading yet—the generated chunks/ corpus is upload-ready, but it is better to validate transcription quality before sending the copyrighted library to remote storage.
+
+
+
+---------------
+
+
+Fixing it first was the right choice. Those issues could break stored citations later. They’re now resolved, so you can start a small ingestion pilot.
+What changed:
+Chunk IDs are now content-addressed SHA-256 IDs; chunk_index is display order only.
+chunks.jsonl now includes the body and maps cleanly to a database row.
+All Obsidian page links use the full vault path.
+Invalid settings return a clean ERROR: without a traceback.
+Missing finish reasons become UNKNOWN and fail safely.
+Empty chunk blocks are ignored.
+Native text cannot close the prompt delimiter; tags are stripped case-insensitively.
+Optional Book.license.json provenance is copied and hashed into the manifest.
+13 tests pass; all PowerShell scripts parse successfully.
+Relevant files: [chunking.py](D:\\rag\\src\\rag_pdf_ingest\\chunking.py), [pipeline.py](D:\\rag\\src\\rag_pdf_ingest\\pipeline.py), [gemini_client.py](D:\\rag\\src\\rag_pdf_ingest\\gemini_client.py), [provenance.py](D:\\rag\\src\\rag_pdf_ingest\\provenance.py), and [license.example.json](D:\\rag\\license.example.json).
+
+
+Should you start?
+Yes—but process a 5–20-page evaluation PDF first, not the whole library:
+Set-Location D:\rag
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+.\scripts\run_once.ps1
+Then inspect the raw text, Markdown, chunks, citations, Hebrew, tables and diagrams.
+Agent/API integration
+That feedback is also correct: do not release the coach agent’s literature citations until retrieval is connected. The referenced application files are not present under D:\rag, so I could not implement that side yet.
+Given the strict requirement to validate chunkId before returning a plan, I now recommend Neon/pgvector for this particular hosted agent instead of Gemini 
+
+
+File Search:
+Upsert chunks.jsonl by stable chunk_id.
+Delete database rows for that book whose IDs disappeared.
+Retrieve top eight passages before running the plan agent.
+Inject those passages into the plan instructions.
+Change citations to { bookId, citation, pageStart, pageEnd, chunkId }.
+Reject any citation whose chunkId was not in the retrieved set.
+Keep interactive literature search as a tool only for /ask and /chat.
+Replace “deeply integrated knowledge” with “cite only retrieved passages.”
+Gemini File Search supports citations and custom metadata, but it operates as a model tool; pgvector gives your route direct control over the exact rows supplied and validated. Google File Search documentation, Vercel File Search integration, Neon pgvector guidance.
+So: start building and evaluating the corpus now. Before enabling book citations in the production coach, provide or open the agent repository so we can wire the retrieval and citation-validation seam.
+
+
+
+-------------------
+
+
+Yes—the pipeline is suitable for approximately 20 × 400-page books. The code is ready for testing, but your Windows environment is not installed yet: only Python 3.14 is present and `.venv` does not exist.
+
+A 15 MB PDF is fine because Gemini receives one rendered page at a time, not the entire book. Oversized page images now automatically switch from PNG to compressed high-quality JPEG before reaching the inline upload limit.
+
+## Free-tier calculation
+
+Approximately:
+
+- 20 books × 400 pages = 8,000 Gemini requests
+- Local governor = maximum 1,400 attempts per rolling 24 hours
+- Minimum interval = 60 seconds
+- Theoretical minimum = 5.7 days
+- Realistic duration = around 7–10 days
+
+Retries count toward the 1,400 limit. On a 429, the watcher now pauses and retries the same page—it does not destroy the rest of the book.
+
+Google no longer publishes one universal quota table; your actual allowance appears in AI Studio under **Dashboard → Rate Limit**. If it shows 1,500/day, the configured 1,400/day is appropriate. [Official rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits)
+
+Gemini 3.6 Flash currently has free input and output tokens on the Free tier and supports 64K output, but Free-tier submitted content may be used to improve Google’s products. Verify that your licenses allow this. [Official Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing), [Gemini 3.6 model information](https://ai.google.dev/gemini-api/docs/latest-model)
+
+Your current `.env` is quality-first and safe for a stated 1,500/day limit:
+
+```dotenv
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_THINKING_LEVEL=HIGH
+GEMINI_MEDIA_RESOLUTION=HIGH
+GEMINI_MAX_OUTPUT_TOKENS=65536
+
+GEMINI_REQUESTS_PER_DAY=1400
+GEMINI_MIN_REQUEST_INTERVAL_SECONDS=60
+GEMINI_PAUSE_ON_RATE_LIMIT=true
+GEMINI_RATE_LIMIT_RETRY_SECONDS=300
+MAX_CONSECUTIVE_PAGE_FAILURES=5
+
+RENDER_DPI=240
+KEEP_PAGE_IMAGES=true
+```
+
+`HIGH` thinking is reasonable for complex biomechanics pages. Later, compare it with `MEDIUM` on 20–50 representative pages; if quality is equivalent, `MEDIUM` will finish faster.
+
+## Start in this order
+
+Install and configure:
+
+```powershell
+winget install -e --id Python.Python.3.12
+```
+
+Restart PowerShell, then:
+
+```powershell
+Set-Location D:\rag
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . doctor
+```
+
+Then:
+
+1. Test a 5–20-page PDF.
+2. Test one complete 400-page book—about 6 hours 40 minutes minimum.
+3. Inspect 20–30 difficult pages.
+4. Only then add the remaining books.
+
+For the multi-day run, install the startup watcher from Administrator PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_watcher_task.ps1 -AtStartup
+```
+
+Keep the computer awake while plugged in.
+
+One storage consideration: `KEEP_PAGE_IMAGES=true` could consume roughly 5–40 GB across 8,000 pages. Keep it enabled during testing. For bulk ingestion, set it to `false` if you do not need every rendered page permanently—the images are still sent to Gemini, and the original PDFs remain available.
+
+The implementation has passed 14 automated tests and all PowerShell validation. What remains is the first live Gemini test. Full instructions are in [README.md](D:\rag\README.md).
+
+
+----
+
+Yes. As a PDF->Markdown corpus builder for agents, this is now genuinely good — better than most things I've seen in this space.
+
+
+gemini free tier typically offers 15 RPM.
+Because Google tracks RPM on a 60-second rolling window, waiting 60 seconds is the standard programmatic way to guarantee that your RPM counter drops back to zero before trying again.
+
+GEMINI_MIN_REQUEST_INTERVAL_SECONDS=60 means 1 page per minute. Do the arithmetic on your corpus:
+
+400-page book → 6.7 hours
+21 books × ~400 pages ≈ 8,400 pages → ~6 days of continuous running, and GEMINI_REQUESTS_PER_DAY=1400 is consistent with that ceiling since a day only holds 1,440 minutes
+
+
+
+--------------
+
+
+The pipeline is functioning correctly, and Gemini’s output is strong—but I would not install the unattended watcher yet. The RECITATION page needs a fallback first.
+I inspected rendered pages 3–5 from test-46fc864fda.pdf.
+What worked
+Pages 1, 2, 3, 5 and 6 completed normally.
+Page 5 matches the native PDF text essentially exactly after removing Markdown formatting.
+Page 3 preserved the contents hierarchy, Preface heading, reading order and physical page boundary.
+The actual files contain correct UTF-8 punctuation. The â€“ and â€™ characters appeared during PowerShell/copying, not in your stored Markdown.
+Resume, atomic output, page metadata, partial status and failed-page exclusion all behaved correctly.
+The LlamaParse example combines material from several physical pages and loses some apostrophes. Your Gemini output is better suited to exact page citations.
+
+
+--------------
+
+
+Fixed. The retry behavior is now reliable, and error pages contain useful diagnostics.
+
+Page 4 looked normal because `RECITATION` evaluates the model’s generated output, not whether the source page is unsafe. Exact transcription of published prose can trigger it inconsistently; your second attempt happened to pass. Google defines it as the response candidate being flagged for recitation. [Gemini API documentation](https://ai.google.dev/api/generate-content)
+
+I verified the original and processed PDFs are byte-for-byte identical by SHA-256. :codex-file-citation{path="D:\Libraries\Downloads\test.pdf" purpose="source"}
+
+## What was fixed
+
+- Error Markdown now shows:
+
+  - Error type
+  - Finish reason
+  - API message
+  - Path to complete response details
+
+- The page JSON now stores `gemini_error_response`, including candidates, finish message, safety data, usage and any partial content returned by the SDK.
+- `RECITATION` with available native PDF text now produces:
+
+```yaml
+status: native_text_fallback
+finish_reason: RECITATION
+fallback_source: pymupdf_native_text
+```
+
+- Native fallback text is searchable, citable and included in chunks.
+- The book remains `partial` so visual layout/image descriptions can still be reviewed.
+- Scanned pages without native text remain failed.
+- `import fitz` was changed to `import pymupdf as fitz`.
+- Automatic function calling is disabled, so the AFC log should disappear.
+- Retry identity is resolved by PDF SHA-256, not the processed filename.
+- Added a dedicated `retry` command that never resends successful pages.
+
+The complete regression suite passes: 18 tests, including a synthetic PDF that fails with `RECITATION`, falls back to native text, then retries only that page from a renamed processed PDF.
+
+## Why your previous retry created another book
+
+The old code calculated the ID from the processed filename:
+
+```text
+test-46fc864fda.pdf
+        +
+46fc864fda
+        =
+test-46fc864fda-46fc864fda
+```
+
+That caused it to process the PDF as a new book. This is fixed: both the original and renamed processed PDF now resolve to canonical book ID:
+
+```text
+test-46fc864fda
+```
+
+The old duplicate directory still exists. Do not upload `test-46fc864fda-46fc864fda` to your retrieval database. Leave it in place until the canonical retry is verified; it can then be cleaned up safely.
+
+## Correct retry command
+
+Retry only failed page 4 using either copy of the PDF:
+
+```powershell
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . retry `
+  "D:\Libraries\Downloads\test.pdf" `
+  --pages 4
+```
+
+Or:
+
+```powershell
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . retry `
+  ".\processed\test-46fc864fda.pdf" `
+  --pages 4
+```
+
+Pages 1, 2, 3, 5 and 6 will be reused without Gemini requests.
+
+If page 4 returns `RECITATION` again, it will automatically become a usable native-text fallback. To ask Gemini to retry a fallback page later:
+
+```powershell
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . retry `
+  ".\processed\test-46fc864fda.pdf" `
+  --pages 4 `
+  --include-fallback
+```
+
+After retrying, run:
+
+```powershell
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . status
+```
+
+You can install the watcher once the canonical `test-46fc864fda` job is either:
+
+- `complete`, or
+- `partial` with only `fallback pages`, and no `failed pages`.
+
+That state has no retrieval hole; fallback pages simply remain flagged for visual review.
+
+
+
+
+-------------------
+
+
+Yes—you can install the watcher. I found no Gemini-client bug that should block ingestion.
+
+What I verified:
+
+- The supplied official Python and JavaScript SDK sources are version 2.16.0; your installed Python SDK is 1.75.0.
+- `genai.Client(...).models.generate_content(...)` remains the correct API for one-page, one-shot transcription.
+- Inline image construction, `thinking_level=HIGH`, `media_resolution=HIGH`, and `max_output_tokens=65536` are correctly configured.
+- Disabling automatic function calling is correct and prevents the unnecessary AFC processing/logging.
+- Finish reason is checked before reading `response.text`, preventing truncated or filtered output from being recorded as complete.
+- `RECITATION`, `SAFETY`, `MAX_TOKENS`, empty candidates, and HTTP failures are handled correctly.
+- The complete Gemini response snapshot is retained for diagnosis.
+- API error-code handling and retry classification match the SDK’s `APIError.code`.
+- The client is explicitly closed.
+- Oversized PNG pages automatically fall back to JPEG below the inline request limit.
+- The Vercel AI SDK reference also maps `RECITATION` to a content filter, confirming our handling.
+- All 18 local tests passed.
+
+I would not upgrade to `google-genai` 2.x while processing the library. Version 1.75.0 already made successful real requests, and the interfaces we use are valid. Upgrade separately later with another test run.
+
+Your current corpus directories are empty and `status` reports no ingestion jobs, so there is no incomplete canonical test book blocking startup.
+
+For a multi-day library ingestion, open PowerShell as Administrator and install the startup watcher:
+
+```powershell
+cd D:\rag
+
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\install_watcher_task.ps1 -AtStartup
+```
+
+This runs as `SYSTEM`, starts after Windows boots, works without an interactive login, restarts on failure, and has no execution time limit.
+
+Confirm it:
+
+```powershell
+Get-ScheduledTask -TaskName RagPdfIngestWatcher
+Get-ScheduledTaskInfo -TaskName RagPdfIngestWatcher
+```
+
+Watch its output:
+
+```powershell
+Get-Content D:\rag\logs\ingest.log -Tail 50 -Wait
+```
+
+Then put one test PDF in:
+
+```text
+D:\rag\inbox
+```
+
+Check afterward:
+
+```powershell
+D:\rag\.venv\Scripts\python.exe -m rag_pdf_ingest --root D:\rag status
+```
+
+Your 10-second request interval allows at most six request starts per minute, while the persistent 1,400-request rolling-day governor remains the ultimate safety limit. If Google returns 429, the watcher pauses and resumes rather than abandoning the page.
+
+Relevant implementation: [gemini_client.py](D:/rag/src/rag_pdf_ingest/gemini_client.py:77), [pipeline.py](D:/rag/src/rag_pdf_ingest/pipeline.py:495), and [install_watcher_task.ps1](D:/rag/scripts/install_watcher_task.ps1:1).
+
+
+---------------
+
+It is already running. No restart is needed.
+State: Running confirms the watcher is active.
+LastTaskResult: 267009 (0x41301) means “task is currently running,” not an error.
+The installer started it immediately after registering it.
+Monitor it with:
+Get-Content D:\rag\logs\ingest.log -Tail 50 -Wait
+Now place a PDF in:
+D:\rag\inbox
+If you ever stop it and want to start it manually:
+Start-ScheduledTask -TaskName RagPdfIngestWatcher
+To restart the watcher:
+Stop-ScheduledTask -TaskName RagPdfIngestWatcher
+Start-ScheduledTask -TaskName RagPdfIngestWatcher
+
+
+
+---------------
+
+Yes, you can place many PDFs in D:\rag\inbox. The watcher processes them sequentially—one book at a time, ordered alphabetically by filename.
+Current intervals:
+Inbox scan: every 5 seconds when idle.
+Copy-completion check: PDF must remain unchanged for 8 seconds.
+Gemini requests: at least 10 seconds between request starts.
+Daily limit: 1,400 requests per rolling 24 hours.
+While processing a book, it does not rescan the inbox. When that book finishes, it processes the next PDF already in the queue immediately. PDFs added meanwhile are discovered on the next scan.
+For your first real book, I recommend adding only one and checking its output. Once it looks correct, placing all 20 in the inbox is fine. If a book has a systemic failure, it moves to failed; processing then continues with the next book.
+One consideration: KEEP_PAGE_IMAGES=true at 240 DPI can consume tens of gigabytes across approximately 8,000 pages. Monitor available disk space:
+Get-PSDrive D
+For a future network share, it can work, with these precautions:
+Share only D:\rag\inbox—never share D:\rag, because .env contains your API key.
+Allow access only to trusted LAN accounts.
+Clients should copy as book.uploading, then rename it to book.pdf after copying finishes. The watcher ignores non-PDF extensions, preventing ingestion of incomplete uploads.
+Avoid two computers uploading the same filename simultaneously.
+Keep PyMuPDF updated because uploaded PDFs are untrusted parser input.
+Remember that anyone with write access could consume your Gemini quota by uploading PDFs.
+The remote path would look like:
+\\YOUR-PC-NAME\RagInbox
+Your local watcher would continue watching D:\rag\inbox; no watcher configuration change would be needed.

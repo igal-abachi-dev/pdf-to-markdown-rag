@@ -1,0 +1,2 @@
+[console_scripts]
+rag-pdf = rag_pdf_ingest.cli:main

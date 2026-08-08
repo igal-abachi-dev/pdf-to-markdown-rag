@@ -1,0 +1,209 @@
+Metadata-Version: 2.4
+Name: rag-pdf-ingest
+Version: 0.1.0
+Summary: Windows PDF ingestion watcher using PyMuPDF and Gemini
+Requires-Python: <3.14,>=3.11
+Description-Content-Type: text/markdown
+License-File: license.example.json
+Requires-Dist: PyMuPDF<2,>=1.26
+Requires-Dist: google-genai<2,>=1.75
+Requires-Dist: tzdata>=2025.2; platform_system == "Windows"
+Dynamic: license-file
+
+# Automatic PDF-to-RAG corpus builder on Windows 11
+
+Drop a PDF into `inbox/`. The watcher extracts exact native text with PyMuPDF, renders every page, sends the page image plus native text to Gemini 3.6 Flash, and writes citation-preserving Markdown and JSON metadata.
+
+This is intentionally a corpus builder, not a local vector database. Codex and Claude Code can search the files directly. A hosted agent can upload the prepared retrieval chunks to Gemini File Search.
+
+## Output layout
+
+For `Biomechanics.pdf`, the content-addressed ID looks like `Biomechanics-a1b2c3d4e5`:
+
+```text
+inbox/                         PDFs waiting to be processed
+raw/<book-id>/
+  page-0001.txt                Native PyMuPDF text
+  page-0001.blocks.json        Text spans, fonts and bounding boxes
+  book.txt                     All raw pages with page markers
+md/<book-id>/
+  page-0001.md                 Gemini Markdown with YAML citation metadata
+  book.md                      Combined Markdown with visible page markers
+metadata/<book-id>/
+  page-0001.json               Page-level citation and API metadata
+  pages.jsonl                  One metadata record per page
+  manifest.json                Resume/status/provenance manifest
+chunks/<book-id>/
+  chunk-<content-hash>-pp-0001-0003.md  Heading-aware retrieval chunk
+  chunks.jsonl                 Stable IDs, bodies, page ranges and hashes
+pages/<book-id>/page-0001.png  Rendered source pages
+processed/                     Complete or partially processed PDFs
+failed/                        PDFs with book-level failures
+logs/ingest.log                Watcher log
+```
+
+The canonical citation is the physical PDF page index, for example `Biomechanics.pdf, PDF p. 142`. Printed page numbers can differ because of covers and front matter.
+
+The Markdown is Obsidian-friendly: YAML properties, tags, callouts, wikilinks and stable page block IDs are included. Open `D:\rag` as the vault root so links between `chunks/` and `md/` resolve. Visible `[Source: ..., PDF page ...]` markers also survive ripgrep and remote re-chunking.
+
+Chunk IDs are content-addressed. `chunk_index` is only presentation order, so inserting or repairing an earlier chunk does not make an unchanged later chunk acquire a different identity. Incremental uploaders should upsert by `chunk_id` and remove remote IDs no longer present in `chunks.jsonl`.
+
+## 1. Install Python 3.12
+
+Use 64-bit Python 3.12:
+
+```powershell
+winget install -e --id Python.Python.3.12
+```
+
+Close and reopen PowerShell, then confirm:
+
+```powershell
+py -3.12 --version
+```
+
+## 2. Create a Gemini API key
+
+Create a key in [Google AI Studio](https://aistudio.google.com/app/apikey). Never paste the key into chat, source files, `AGENTS.md`, or `CLAUDE.md`.
+
+## 3. Install the project
+
+```powershell
+Set-Location D:\rag
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows.ps1
+notepad .env
+```
+
+Paste the key after `GEMINI_API_KEY=`. Important defaults are:
+
+```dotenv
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_THINKING_LEVEL=HIGH
+GEMINI_MEDIA_RESOLUTION=HIGH
+GEMINI_MAX_OUTPUT_TOKENS=65536
+GEMINI_REQUESTS_PER_DAY=18
+GEMINI_MIN_REQUEST_INTERVAL_SECONDS=15
+GEMINI_PAUSE_ON_RATE_LIMIT=true
+GEMINI_RATE_LIMIT_RETRY_SECONDS=300
+MAX_CONSECUTIVE_PAGE_FAILURES=5
+RENDER_DPI=240
+CHUNK_TARGET_TOKENS=750
+CHUNK_MAX_TOKENS=900
+CHUNK_OVERLAP_TOKENS=120
+```
+
+High thinking is expensive for bulk transcription. After testing quality, consider `MEDIUM` for ordinary pages.
+
+### Free-tier governor
+
+Rate limits are project-specific and can change. Check the project in Google AI Studio's **Dashboard > Rate Limit**, then set `GEMINI_REQUESTS_PER_DAY` below the displayed daily allowance. Gemini 3.6 Flash currently shows 20 RPD for this project's free tier, so the supplied value is 18 and leaves two requests for testing or other applications sharing the project.
+
+The watcher persists request timestamps under `.state/gemini_request_limit.json`, spaces call starts by at least 15 seconds (four RPM), and limits attempts to 18 per Gemini calendar day. Google's RPD window resets at midnight Pacific; the governor follows that fixed reset instead of using a rolling 24-hour approximation. API retries count as requests. A 429 logs Google's quota details; a daily-quota response or three consecutive 429s pauses until the next Pacific reset instead of retrying every five minutes forever.
+
+Five consecutive page failures stop the book as a systemic failure. Completed pages remain resumable, preventing a bad key, incompatible model setting or outage from creating hundreds of failed placeholders.
+
+In strict one-page-per-request mode, a 399-page book requires at least 20 Gemini quota days at the full 20 RPD, or about 23 days at the safer local cap of 18. Twenty 400-page books require about 8,000 successful requests and roughly 445 quota days at 18 RPD. This is the cost of retaining the highest-isolation page workflow on this free-tier quota; billing or a separately evaluated multi-page batching mode is required for materially shorter completion time.
+
+The free Gemini API tier may use submitted content to improve Google's products. Confirm that each book's license permits that processing; a grant limited to strictly private processing may require a paid tier or a local model.
+
+## 4. Run a small manual test
+
+Start with a non-sensitive PDF of 2-5 pages. Copy it into `inbox/`, wait at least eight seconds, then run:
+
+```powershell
+.\scripts\run_once.ps1
+```
+
+Inspect `raw/<book-id>/book.txt`, `md/<book-id>/book.md`, `metadata/<book-id>/pages.jsonl`, `chunks/<book-id>/chunks.jsonl`, and `logs/ingest.log`. Compare numbers, Hebrew, tables, diagrams and reading order against the rendered PNG pages.
+
+Useful commands:
+
+```powershell
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . doctor
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . status
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . ingest "D:\books\one-book.pdf"
+```
+
+An interrupted job reuses successful page pairs. Failed page records are retried on the next explicit ingestion attempt.
+
+To retry only failed pages from an existing book, pass either the original PDF or its renamed copy under `processed/`. The source SHA-256 resolves both paths to the same canonical book ID:
+
+```powershell
+.venv\Scripts\python.exe -m rag_pdf_ingest --root . retry `
+  ".\processed\<book-id>.pdf"
+```
+
+Restrict the retry to selected physical PDF pages with `--pages 4` or `--pages 4,7-9`. Successful pages are never sent again. Native-text fallback pages are retained unless `--include-fallback` is supplied.
+
+### Optional license provenance
+
+Place `Book.license.json` beside `Book.pdf` before ingestion. Copy [license.example.json](license.example.json) and record the grant, scope, rights holder and evidence reference appropriate to that title. The pipeline copies the record and its SHA-256 into `metadata/<book-id>/license.json` and `manifest.json`; chunks also carry `license_status`. If no sidecar exists, the status is explicitly `unspecified`.
+
+## 5. Start automatically
+
+The normal installation runs after your user logs on:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_watcher_task.ps1
+```
+
+To ingest before login, open PowerShell **as Administrator** and install a startup task running under `SYSTEM`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_watcher_task.ps1 -AtStartup
+```
+
+Verify or remove the task:
+
+```powershell
+Get-ScheduledTask -TaskName RagPdfIngestWatcher
+Get-Content .\logs\ingest.log -Tail 50
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall_watcher_task.ps1
+```
+
+## Failure behavior
+
+The watcher retries temporary failures such as timeouts, rate limits and server errors. Permanent bad requests and completed responses with `MAX_TOKENS`, `SAFETY`, or another non-`STOP` finish reason are not repeatedly retried.
+
+If one page fails, it gets an explicit Obsidian warning note with the error type, finish reason, API message and metadata path. The complete error response snapshot is stored in the page JSON rather than bloating retrieval Markdown.
+
+For `RECITATION`, a page with native PDF text becomes `native_text_fallback`: the exact local text remains searchable, citable and included in chunks, while the page stays flagged for visual-layout review. A scanned page without native text remains failed and requires OCR or another parser. The remaining pages continue and the book finishes as `partial`. Other failed page bodies are excluded from retrieval chunks. Complete and partial inputs move to `processed/`; only book-level failures move to `failed/`.
+
+The default output ceiling is 65,536 because thinking tokens share the output budget. A failed page can be retried by explicitly ingesting its processed PDF again; successful pages are reused.
+
+Stale locks recover automatically. A lock is removed only when its recorded PID is no longer running, and a process never deletes a lock it failed to acquire.
+
+## Retrieval: local and hosted agents
+
+For Codex or Claude Code on this machine, search `md/`, `raw/` and `metadata/` directly. File search or ripgrep is especially reliable for exact numbers, units, names and Hebrew. Do not add a local vector database unless evaluation shows a real retrieval gap.
+
+For a hosted Vercel agent, upload the Markdown files under `chunks/<book-id>/` to Gemini File Search. Each chunk is heading-aware, approximately 500-900 tokens, carries `page_start`/`page_end`, and contains a visible source marker. Keep `md/<book-id>/page-NNNN.md` as the exact local citation layer.
+
+`chunks.jsonl` also contains the plain `body`, stable `chunk_id`, citation fields and license status, so it can be loaded directly into a pgvector/Drizzle table when the application must validate exact retrieved IDs.
+
+Current integrations use a File Search store and the File Search tool. In the Vercel AI SDK, use `google.tools.fileSearch(...)`; `providerOptions.google.fileSearchStore` is not the current interface. See the official [Gemini File Search guide](https://ai.google.dev/gemini-api/docs/file-search) and [Vercel Google provider guide](https://ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai).
+
+## Why page images and native text are both supplied
+
+- PyMuPDF provides exact embedded text, fonts, spans and bounding boxes.
+- The rendered page gives Gemini columns, headings, figures, labels and reading order.
+- Image-only scans simply have an empty native-text reference and are transcribed visually.
+- Gemini is instructed to treat page content as untrusted data, not as instructions.
+
+This can improve complex textbook pages over native extraction alone, but no parser wins on every page. Build a 50-100 page evaluation set from your own books before processing the entire collection.
+
+For fitness and health books, include plain and Hebrew prose, columns, scans, nutrition tables, units/dosages, anatomy labels, exercise sequences, charts and references. Medical or training claims must remain traceable to the original PDF page; generated image descriptions are not independent clinical evidence.
+
+## Troubleshooting
+
+If `doctor` reports a missing key, open `.env` and set:
+
+```dotenv
+GEMINI_API_KEY=your-key-here
+```
+
+If a PDF remains in `inbox/`, check `FILE_STABLE_SECONDS`, `logs/ingest.log`, and Task Scheduler history. The `doctor` command performs real write probes for the inbox and output directories.
+
+If costs are too high, change `GEMINI_THINKING_LEVEL=MEDIUM`, lower `RENDER_DPI` to 200, or use Gemini only for scanned and visually complex pages.
+
+For the first quality test, keep `KEEP_PAGE_IMAGES=true`. Before the full 8,000-page run, decide whether you need every PNG/JPEG for auditing. Setting it to `false` still sends rendered pages to Gemini and keeps the original PDFs, but can save tens of gigabytes of local disk space.

@@ -1,0 +1,5 @@
+PyMuPDF<2,>=1.26
+google-genai<2,>=1.75
+
+[:platform_system == "Windows"]
+tzdata>=2025.2
