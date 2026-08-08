@@ -12,8 +12,9 @@ ingest PDF →  Markdown + retrieval chunks + optional SQLite corpus   > for RAG
 
 This is a production-oriented **pre-deployment corpus builder**, not a vector database, agent runtime, or real-time upload endpoint. It prepares difficult PDF books for local tools such as Codex and Claude Code and for hosted agents built with Fastify, the Vercel AI SDK, Gemini File Search, or a custom SQLite retrieval layer.
 
-Drop a PDF into `inbox/` or run a one-shot command. The pipeline:
-when you Drop a PDF into `inbox/`. The watcher extracts exact native text with PyMuPDF, renders every page, sends the page image plus native text to Gemini 3.6 Flash, and writes citation-preserving Markdown and JSON metadata.
+Drop a PDF into `inbox/` or run a one-shot command. The watcher extracts exact native text with PyMuPDF, renders every page, sends the page image plus native text to Gemini 3.6 Flash, and writes citation-preserving Markdown and JSON metadata. 
+
+The pipeline:
 
 1. Extracts exact native text, fonts, spans, geometry, outlines, and printed page labels with PyMuPDF.
 2. Renders a high-resolution image of each physical PDF page.
@@ -33,6 +34,37 @@ The current visual backend is **Gemini 3.6 Flash with HIGH thinking and HIGH med
 ## Why 
 
 Many PDF-to-RAG scripts flatten reading order, split tables, discard page identity, or leave citation text for the answering model to invent. This pipeline treats the original physical PDF page as the stable evidence boundary and keeps every transformation auditable. It favors fidelity, provenance, resumability, and deterministic recovery over real-time throughput.
+
+### Ingestion quality and retrieval quality are different problems
+
+A vector database, MCP RAG server, reranker, or hosted File Search service can improve which chunks are retrieved, but it cannot restore a table, diagram, heading, page label, or reading order that the PDF parser already lost. This project concentrates on that earlier boundary: producing reliable evidence that can then be searched by several different retrieval systems.
+
+The outputs are deliberately portable. You can search `md/` and `chunks/` directly with Codex, Claude Code, Cursor, or ripgrep; expose the same files through an MCP server; pack them into the included SQLite hybrid-search artifact; or upload the chunks to an authorized hosted retrieval service. Using this pipeline does not require adopting a particular agent framework or vector database.
+
+### Common PDF-to-RAG approaches
+
+| Approach | Setup and ingestion | Complex-page fidelity | Retrieval | Citation quality | Best fit |
+|---|---|---|---|---|---|
+| Raw PDF or basic extracted text plus agentic search | Very little setup; usually fastest | Limited when columns, tables, scans, or figures matter | Strong for exact terms when the extracted text is clean; the agent can iteratively grep and read | Depends on the extractor; often only a filename or approximate location | Code, notes, and simple text-first PDFs |
+| Fast PDF-to-text/Markdown converter | Easy and local; often processes books quickly | Varies by parser; lightweight converters commonly prioritize text over layout and figures | None by itself; feed the output to grep, MCP, or another index | Varies; physical and printed-page identity may need extra work | Large volumes of straightforward PDFs |
+| Local MCP RAG server | Usually easy to install and can provide local embeddings, lexical search, and agent tools | Only as good as its underlying PDF parser | Better semantic retrieval than grep alone when the corpus uses varied terminology | Often chunk- or filename-based unless the ingestion layer preserves stronger evidence | Private local corpora where convenience matters most |
+| Full local vector stack | More components to operate: parser, chunker, embedder, index, and tool/API | Still determined by the parser, not the vector database | Highly configurable semantic, lexical, hybrid, and reranked search | Must be designed into the corpus and retrieval contract | Large or frequently changing private knowledge bases |
+| Manual conversion and correction | Slow and labor-intensive, but precise for a small set | Potentially excellent when reviewed page by page | Works with any later retrieval method | Potentially excellent if citations are recorded during cleanup | A few especially important documents |
+| This pipeline | More setup and slower visual ingestion; resumable and auditable | Designed for tables, columns, diagrams, scans, English/Hebrew, and exact native glyph evidence | Filesystem search, SQLite FTS5 plus vectors, MCP, or hosted File Search | Physical PDF page, optional printed label, stable chunk ID, bibliography, and quality flags | Textbooks and technical/reference books where fidelity and traceability justify preprocessing |
+
+These categories are not mutually exclusive. For example, this pipeline can prepare the Markdown and evidence metadata, while an MCP server provides the agent-facing search tool. Likewise, SQLite and Gemini File Search are alternative retrieval targets for the same `chunks.jsonl`; they do not replace PDF ingestion.
+
+### When this pipeline is better used
+
+Use a simpler path when the documents are already clean text, occasional exact-phrase lookup is enough, or approximate citations are acceptable. This pipeline becomes valuable when one or more of these are requirements:
+
+- Tables, multi-column reading order, figures, scans, or mixed English/Hebrew must survive ingestion.
+- Answers must point back to the real physical PDF page and retain the printed label when available.
+- Failed, refused, or locally routed pages must remain visible instead of silently disappearing from the corpus.
+- The corpus should be prepared once and reused by both local coding agents and a hosted application.
+- Book and chunk identities must remain stable across retries, metadata corrections, and offline rebuilds.
+
+At textbook-library scale, such as 200 books with roughly 400 pages each, fast extraction is easier to finish but can make every later query operate on incomplete evidence. This pipeline spends more time during the one-time preparation stage so later retrieval can use cleaner, page-traceable material. The current strict Gemini route can also take a long time under free-tier quotas; the opt-in native router reduces calls only for pages that pass conservative deterministic gates.
 
 ## Key features
 
